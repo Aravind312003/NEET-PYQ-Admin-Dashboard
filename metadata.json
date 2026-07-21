@@ -1,0 +1,6 @@
+{
+  "name": "NEET PYQ Admin Dashboard",
+  "description": "Secure, full-featured Admin Panel for managing NEET previous year questions, users, analytics, and imports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

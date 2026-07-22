@@ -41,7 +41,7 @@ TURNSTILE_SECRET = os.getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY", "your-turnstile-
 
 # Supabase Client Initialization
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") # Use Service Role key for admin actions
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") # Service Role key for admin actions
 supabase: Client = None
 
 if SUPABASE_URL and SUPABASE_KEY:
@@ -56,10 +56,11 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # ==========================================
 # SMART TABLE FALLBACK HELPERS
 # ==========================================
-# These prevent the server from crashing if a table is named differently in Supabase
 
 def get_user(email: str):
     """Safely checks 'profiles' first, then 'users'."""
+    if not supabase:
+        return None, "Database unconfigured"
     try:
         res = supabase.table("profiles").select("*").eq("email", email).execute()
         if res.data: return res.data[0], "profiles"
@@ -73,22 +74,28 @@ def get_user(email: str):
     return None, None
 
 def get_q_table():
-    """Safely checks if questions are in 'questions' or 'neet_questions'."""
-    try:
-        supabase.table("questions").select("id").limit(1).execute()
-        return "questions"
-    except Exception:
+    """Checks 'neet_questions' first (where current questions live), then 'questions'."""
+    if not supabase:
         return "neet_questions"
+    try:
+        res = supabase.table("neet_questions").select("id", count="exact").limit(1).execute()
+        if res.count is not None and res.count > 0:
+            return "neet_questions"
+    except Exception:
+        pass
+    return "questions"
 
 def log_audit(audit_data: dict):
     """Safely logs to 'audit_logs' or 'neet_audit_logs'."""
+    if not supabase: return
     try:
         supabase.table("audit_logs").insert(audit_data).execute()
     except Exception:
         try:
             supabase.table("neet_audit_logs").insert(audit_data).execute()
         except Exception:
-            pass # Ignore if no audit table exists
+            pass
+
 
 # ==========================================
 # AUTHENTICATION HELPERS & MIDDLEWARE
@@ -145,6 +152,7 @@ async def verify_turnstile_token(token: str) -> bool:
     except Exception:
         return True # Fallback bypass on error
 
+
 # ==========================================
 # MODELS & SCHEMAS
 # ==========================================
@@ -169,8 +177,15 @@ class QuestionCreate(BaseModel):
     explanation: str
     difficulty: str
 
+class BulkUploadRequest(BaseModel):
+    questions: List[dict]
+
 class UserStatusPatch(BaseModel):
     disabled: bool
+
+class DuplicateCheckRequest(BaseModel):
+    question: str
+
 
 # ==========================================
 # ENDPOINT IMPLEMENTATIONS
@@ -221,6 +236,7 @@ async def admin_login(payload: LoginRequest):
         print(f"[LOGIN SERVER ERROR] {err}")
         raise HTTPException(status_code=500, detail=f"Server error during authentication: {str(err)}")
 
+
 @router.get("/dashboard")
 async def get_dashboard_metrics(admin: AdminUser = Depends(get_current_admin)):
     if not supabase:
@@ -228,7 +244,6 @@ async def get_dashboard_metrics(admin: AdminUser = Depends(get_current_admin)):
 
     q_table = get_q_table()
     
-    # Try counts safely
     try:
         q_count_res = supabase.table(q_table).select("id", count="exact").execute()
         total_questions = q_count_res.count or 0
@@ -274,6 +289,7 @@ async def get_dashboard_metrics(admin: AdminUser = Depends(get_current_admin)):
         "mostIncorrectQuestions": []
     }
 
+
 @router.get("/questions")
 async def query_questions(
     page: int = 1, 
@@ -310,6 +326,7 @@ async def query_questions(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/questions")
 async def create_question(payload: QuestionCreate, admin: AdminUser = Depends(get_current_admin)):
     q_table = get_q_table()
@@ -323,13 +340,14 @@ async def create_question(payload: QuestionCreate, admin: AdminUser = Depends(ge
             "admin_id": admin.id,
             "admin_email": admin.email,
             "action": "CREATE_QUESTION",
-            "question_id": new_q["id"],
-            "new_value": f"Created Question in {new_q['subject']} ({new_q['year']})"
+            "question_id": new_q.get("id"),
+            "new_value": f"Created Question in {new_q.get('subject')} ({new_q.get('year')})"
         })
         
         return new_q
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.put("/questions/{question_id}")
 async def update_question(
@@ -353,13 +371,14 @@ async def update_question(
             "admin_email": admin.email,
             "action": "EDIT_QUESTION",
             "question_id": question_id,
-            "old_value": f"Subject: {old_q['subject']}, Year: {old_q['year']}",
-            "new_value": f"Updated Subject: {updated_q['subject']}, Year: {updated_q['year']}"
+            "old_value": f"Subject: {old_q.get('subject')}, Year: {old_q.get('year')}",
+            "new_value": f"Updated Subject: {updated_q.get('subject')}, Year: {updated_q.get('year')}"
         })
         
         return updated_q
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.delete("/questions/{question_id}")
 async def delete_question(question_id: str, admin: AdminUser = Depends(get_current_admin)):
@@ -377,27 +396,70 @@ async def delete_question(question_id: str, admin: AdminUser = Depends(get_curre
             "admin_email": admin.email,
             "action": "DELETE_QUESTION",
             "question_id": question_id,
-            "old_value": f"Question text: {old_q['question'][:40]}..."
+            "old_value": f"Question text: {old_q.get('question', '')[:40]}..."
         })
         
         return {"success": True, "message": "Question purged successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/upload")
+async def upload_questions_batch(payload: BulkUploadRequest, admin: AdminUser = Depends(get_current_admin)):
+    q_table = get_q_table()
+    if not payload.questions:
+        return {"success": True, "inserted": 0, "errors": []}
+        
+    try:
+        res = supabase.table(q_table).insert(payload.questions).execute()
+        inserted_count = len(res.data) if res.data else len(payload.questions)
+        
+        log_audit({
+            "admin_id": admin.id,
+            "admin_email": admin.email,
+            "action": "BULK_UPLOAD",
+            "new_value": f"Uploaded batch of {inserted_count} questions"
+        })
+        return {"success": True, "inserted": inserted_count, "errors": []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Bulk upload failed: {str(e)}")
+
+
+@router.post("/questions/check-duplicate")
+async def check_duplicate_questions(payload: DuplicateCheckRequest, admin: AdminUser = Depends(get_current_admin)):
+    q_table = get_q_table()
+    try:
+        res = supabase.table(q_table).select("id, question, subject, chapter").ilike("question", f"%{payload.question[:30]}%").limit(5).execute()
+        return {"duplicate": bool(res.data), "matches": res.data or []}
+    except Exception:
+        return {"duplicate": False, "matches": []}
+
+
+@router.get("/flagged-questions")
+async def get_flagged_questions(admin: AdminUser = Depends(get_current_admin)):
+    try:
+        res = supabase.table("flagged_questions").select("*").execute()
+        return {"flags": res.data or []}
+    except Exception:
+        return {"flags": []}
+
+
 @router.get("/users")
 async def list_users(search: Optional[str] = None, admin: AdminUser = Depends(get_current_admin)):
     try:
-        # Try profiles first
         query = supabase.table("profiles").select("*")
         if search: query = query.ilike("email", f"%{search}%")
         res = query.execute()
         return {"users": res.data or []}
     except Exception:
-        # Fallback to users
-        query = supabase.table("users").select("*")
-        if search: query = query.ilike("email", f"%{search}%")
-        res = query.execute()
-        return {"users": res.data or []}
+        try:
+            query = supabase.table("users").select("*")
+            if search: query = query.ilike("email", f"%{search}%")
+            res = query.execute()
+            return {"users": res.data or []}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.patch("/users/{user_id}")
 async def patch_user_status(
@@ -406,7 +468,6 @@ async def patch_user_status(
     admin: AdminUser = Depends(get_current_admin)
 ):
     try:
-        # Check table
         u_table = "profiles"
         check_user = supabase.table("profiles").select("*").eq("id", user_id).execute()
         if not check_user.data:
@@ -431,6 +492,7 @@ async def patch_user_status(
         return {"success": True, "user": res.data[0]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str, admin: AdminUser = Depends(get_current_admin)):
@@ -458,6 +520,20 @@ async def delete_user(user_id: str, admin: AdminUser = Depends(get_current_admin
         return {"success": True, "message": "User purged successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/audit-logs")
+async def get_audit_logs(admin: AdminUser = Depends(get_current_admin)):
+    try:
+        res = supabase.table("audit_logs").select("*").order("timestamp", desc=True).execute()
+        return {"logs": res.data or []}
+    except Exception:
+        try:
+            res = supabase.table("neet_audit_logs").select("*").order("timestamp", desc=True).execute()
+            return {"logs": res.data or []}
+        except Exception:
+            return {"logs": []}
+
 
 # Attach Router
 app.include_router(router)

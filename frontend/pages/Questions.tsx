@@ -23,12 +23,12 @@ import {
 import { Question } from '../types';
 import Modal from '../components/Modal';
 
+const API_BASE = 'https://neet-pyq-admin-dashboard.onrender.com/api/admin';
+
 export default function Questions() {
   const navigate = useNavigate();
-
   // Active sub-tab
   const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'flagged'>('catalog');
-
   // Core Questions States
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,7 +63,7 @@ export default function Questions() {
   const [formDifficulty, setFormDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
   const [formImage, setFormImage] = useState<string | null>(null);
 
-  // Duplicate Check State inside Form
+  // Duplicate Check State
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [duplicateMatches, setDuplicateMatches] = useState<any[]>([]);
   const [duplicateChecked, setDuplicateChecked] = useState(false);
@@ -75,7 +75,7 @@ export default function Questions() {
   const [flagAdminNote, setFlagAdminNote] = useState('');
   const [flagStatus, setFlagStatus] = useState<'pending' | 'resolved' | 'dismissed'>('pending');
 
-  // Flag Cascading Edit Form values (editing question fields via flag)
+  // Flag Cascading Edit Form values
   const [flagCascadeQuestion, setFlagCascadeQuestion] = useState('');
   const [flagCascadeOptA, setFlagCascadeOptA] = useState('');
   const [flagCascadeOptB, setFlagCascadeOptB] = useState('');
@@ -97,7 +97,6 @@ export default function Questions() {
       navigate('/admin/login');
       return;
     }
-
     try {
       const queryParams = new URLSearchParams({
         page: String(page),
@@ -108,7 +107,7 @@ export default function Questions() {
         difficulty: filterDifficulty,
       });
 
-      const response = await fetch(`/api/admin/questions?${queryParams.toString()}`, {
+      const response = await fetch(`${API_BASE}/questions?${queryParams.toString()}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -125,7 +124,6 @@ export default function Questions() {
       if (!response.ok) {
         throw new Error(data.message || 'Failed to fetch questions.');
       }
-
       setQuestions(data.questions || []);
       setTotalPages(data.totalPages || 1);
       setTotalQuestions(data.total || 0);
@@ -142,9 +140,8 @@ export default function Questions() {
     setLoadingFlags(true);
     const token = localStorage.getItem('adminToken');
     if (!token) return;
-
     try {
-      const response = await fetch('/api/admin/flagged-questions', {
+      const response = await fetch(`${API_BASE}/flagged-questions`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -181,9 +178,8 @@ export default function Questions() {
     setDuplicateChecked(true);
     const token = localStorage.getItem('adminToken');
     if (!token) return;
-
     try {
-      const response = await fetch('/api/admin/questions/check-duplicate', {
+      const response = await fetch(`${API_BASE}/questions/check-duplicate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -193,7 +189,6 @@ export default function Questions() {
       });
       if (response.ok) {
         const resData = await response.json();
-        // Ignore the question currently editing itself
         const filtered = (resData.matches || []).filter((q: any) => q.id !== editingQuestion?.id);
         setDuplicateMatches(filtered);
       }
@@ -204,7 +199,6 @@ export default function Questions() {
     }
   };
 
-  // Trigger editing
   const handleStartEdit = (q: Question) => {
     setEditingQuestion(q);
     setFormYear(q.year);
@@ -220,7 +214,6 @@ export default function Questions() {
     setFormExplanation(q.explanation);
     setFormDifficulty(q.difficulty);
     setFormImage(q.image_url);
-    
     setDuplicateChecked(false);
     setDuplicateMatches([]);
     setIsFormOpen(true);
@@ -241,29 +234,11 @@ export default function Questions() {
     setFormExplanation('');
     setFormDifficulty('Medium');
     setFormImage(null);
-
     setDuplicateChecked(false);
     setDuplicateMatches([]);
     setIsFormOpen(true);
   };
 
-  // Image upload handling with instant preview
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setFormImage(reader.result as string);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleRemoveImage = () => {
-    setFormImage(null);
-  };
-
-  // Delete handler
   const triggerDelete = (id: string) => {
     setDeletingId(id);
     setIsDeleteOpen(true);
@@ -274,19 +249,16 @@ export default function Questions() {
     const token = localStorage.getItem('adminToken');
     if (!token) return;
     setIsDeleteOpen(false);
-
     try {
-      const response = await fetch(`/api/admin/questions/${deletingId}`, {
+      const response = await fetch(`${API_BASE}/questions/${deletingId}`, {
         method: 'DELETE',
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
-
       if (!response.ok) {
         throw new Error('Failed to delete question');
       }
-
       setSuccessMsg('Question deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
       fetchQuestions();
@@ -296,19 +268,15 @@ export default function Questions() {
     }
   };
 
-  // Submit form
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
     if (!formChapter || !formText || !formOptionA || !formOptionB || !formOptionC || !formOptionD || !formExplanation) {
       setError('Please provide values for all required question fields.');
       return;
     }
-
     const token = localStorage.getItem('adminToken');
     if (!token) return;
-
     const bodyData = {
       year: Number(formYear),
       subject: formSubject,
@@ -324,11 +292,10 @@ export default function Questions() {
       difficulty: formDifficulty,
       image_url: formImage,
     };
-
     try {
       let response;
       if (editingQuestion) {
-        response = await fetch(`/api/admin/questions/${editingQuestion.id}`, {
+        response = await fetch(`${API_BASE}/questions/${editingQuestion.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -337,7 +304,7 @@ export default function Questions() {
           body: JSON.stringify(bodyData),
         });
       } else {
-        response = await fetch('/api/admin/questions', {
+        response = await fetch(`${API_BASE}/questions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -346,12 +313,10 @@ export default function Questions() {
           body: JSON.stringify(bodyData),
         });
       }
-
       const resData = await response.json();
       if (!response.ok) {
         throw new Error(resData.message || 'Failed to save question records.');
       }
-
       setSuccessMsg(editingQuestion ? 'Question updated successfully.' : 'New Question added successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
       setIsFormOpen(false);
@@ -362,87 +327,9 @@ export default function Questions() {
     }
   };
 
-  // Open flag review panel
-  const handleReviewFlag = (flag: any) => {
-    setActiveFlag(flag);
-    setFlagAdminNote(flag.admin_note || '');
-    setFlagStatus(flag.status || 'pending');
-
-    // Seed cascade edit form with current target question parameters
-    const targetQ = questions.find(q => q.id === flag.question_id);
-    if (targetQ) {
-      setFlagCascadeQuestion(targetQ.question);
-      setFlagCascadeOptA(targetQ.option_a);
-      setFlagCascadeOptB(targetQ.option_b);
-      setFlagCascadeOptC(targetQ.option_c);
-      setFlagCascadeOptD(targetQ.option_d);
-      setFlagCascadeCorrect(targetQ.correct_answer);
-      setFlagCascadeExplanation(targetQ.explanation);
-    } else {
-      // Clear
-      setFlagCascadeQuestion(flag.question_text || '');
-      setFlagCascadeOptA('');
-      setFlagCascadeOptB('');
-      setFlagCascadeOptC('');
-      setFlagCascadeOptD('');
-      setFlagCascadeCorrect('A');
-      setFlagCascadeExplanation('');
-    }
-  };
-
-  // Submit Flag Resolution with cascade edits
-  const handleResolveFlagSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeFlag) return;
-    const token = localStorage.getItem('adminToken');
-    if (!token) return;
-
-    const payload: any = {
-      status: flagStatus,
-      admin_note: flagAdminNote,
-    };
-
-    // Include cascading edits to update associated question automatically if selected
-    if (flagStatus === 'resolved' && flagCascadeQuestion.trim()) {
-      payload.update_question = {
-        question: flagCascadeQuestion,
-        option_a: flagCascadeOptA,
-        option_b: flagCascadeOptB,
-        option_c: flagCascadeOptC,
-        option_d: flagCascadeOptD,
-        correct_answer: flagCascadeCorrect,
-        explanation: flagCascadeExplanation,
-      };
-    }
-
-    try {
-      const response = await fetch(`/api/admin/flagged-questions/${activeFlag.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to resolve reported issue.');
-      }
-
-      setSuccessMsg('Reported issue resolved successfully. Cascading edits synchronized.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      setActiveFlag(null);
-      fetchFlaggedIssues();
-      fetchQuestions();
-    } catch (err: any) {
-      console.error('Flag patch failed:', err);
-      setError(err.message || 'Failed to update issue status.');
-    }
-  };
-
   return (
     <div className="space-y-6">
-      {/* Tab bar header */}
+      {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black text-neutral-900 dark:text-neutral-50 tracking-tight">
@@ -452,8 +339,6 @@ export default function Questions() {
             Build the NCERT question bank, run duplicate checks, or review flagged student complaints.
           </p>
         </div>
-
-        {/* Sub-tab selection */}
         <div className="flex bg-neutral-100 dark:bg-neutral-900 p-1 rounded-xl border border-neutral-200 dark:border-neutral-800 self-start">
           <button
             onClick={() => setActiveSubTab('catalog')}
@@ -475,9 +360,6 @@ export default function Questions() {
           >
             <Flag className="h-3.5 w-3.5" />
             Flagged Reports
-            {flags.filter(f => f.status === 'pending').length > 0 && (
-              <span className="h-2 w-2 rounded-full bg-rose-500 inline-block animate-pulse"></span>
-            )}
           </button>
         </div>
       </div>
@@ -489,7 +371,6 @@ export default function Questions() {
           <span className="font-semibold">{successMsg}</span>
         </div>
       )}
-
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 dark:border-red-950/50 dark:bg-red-950/30 p-4 text-red-700 dark:text-red-400 text-sm flex items-center gap-2">
           <AlertCircle className="h-5 w-5" />
@@ -497,7 +378,6 @@ export default function Questions() {
         </div>
       )}
 
-      {/* CONDITIONAL RENDER: SUB-TAB 1: CATALOG */}
       {activeSubTab === 'catalog' && (
         <>
           {/* Filter Bar */}
@@ -512,7 +392,6 @@ export default function Questions() {
                 className="w-full pl-9 pr-4 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs focus:border-emerald-500 focus:outline-hidden"
               />
             </form>
-
             <div className="grid grid-cols-3 gap-2 shrink-0">
               <select
                 value={filterSubject}
@@ -526,8 +405,9 @@ export default function Questions() {
                 <option value="Physics">Physics</option>
                 <option value="Chemistry">Chemistry</option>
                 <option value="Biology">Biology</option>
+                <option value="Botany">Botany</option>
+                <option value="Zoology">Zoology</option>
               </select>
-
               <select
                 value={filterYear}
                 onChange={(e) => {
@@ -543,7 +423,6 @@ export default function Questions() {
                   </option>
                 ))}
               </select>
-
               <select
                 value={filterDifficulty}
                 onChange={(e) => {
@@ -558,7 +437,6 @@ export default function Questions() {
                 <option value="Hard">Hard</option>
               </select>
             </div>
-
             <button
               onClick={handleStartAdd}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
@@ -568,7 +446,7 @@ export default function Questions() {
             </button>
           </div>
 
-          {/* Catalog list table */}
+          {/* Table */}
           <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-xs">
             {loading ? (
               <div className="flex flex-col items-center justify-center p-12 gap-2 min-h-[300px]">
@@ -669,474 +547,13 @@ export default function Questions() {
         </>
       )}
 
-      {/* CONDITIONAL RENDER: SUB-TAB 2: FLAGGED QUESTIONS */}
-      {activeSubTab === 'flagged' && (
-        <div className="space-y-6">
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-5 shadow-xs">
-            <h3 className="font-bold text-sm text-neutral-900 dark:text-neutral-50 mb-1">Student Issue Flag Reports Queue</h3>
-            <p className="text-[11px] text-neutral-400 mb-6">Review student submissions regarding errors in correct options, NCERT source mismatches, or translation details</p>
-
-            {loadingFlags ? (
-              <div className="flex flex-col items-center justify-center py-12 gap-2">
-                <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-                <span className="text-xs text-neutral-400 font-semibold">Scanning reported issues...</span>
-              </div>
-            ) : flags.length === 0 ? (
-              <div className="text-center py-12 text-xs text-neutral-400">
-                <CheckCircle className="h-8 w-8 text-emerald-500 mx-auto mb-2" />
-                No active flagged issue reports currently registered!
-              </div>
-            ) : (
-              <div className="overflow-x-auto rounded-xl border border-neutral-100 dark:border-neutral-800">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-neutral-50 dark:bg-neutral-950 text-neutral-400 uppercase font-bold border-b border-neutral-100 dark:border-neutral-800">
-                      <th className="px-4 py-3">Reported Timestamp</th>
-                      <th className="px-4 py-3">Student Email</th>
-                      <th className="px-4 py-3">Reported Issue Reason</th>
-                      <th className="px-4 py-3">Associated Question Snippet</th>
-                      <th className="px-4 py-3">Report State</th>
-                      <th className="px-4 py-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
-                    {flags.map((fl) => (
-                      <tr key={fl.id} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/10">
-                        <td className="px-4 py-3.5 font-mono text-neutral-400">
-                          {new Date(fl.timestamp || Date.now()).toLocaleDateString()}
-                        </td>
-                        <td className="px-4 py-3.5 font-medium text-neutral-800 dark:text-neutral-200">
-                          {fl.student_email || 'anonymous@student.com'}
-                        </td>
-                        <td className="px-4 py-3.5 font-bold text-rose-600 max-w-xs truncate" title={fl.reason}>
-                          {fl.reason}
-                        </td>
-                        <td className="px-4 py-3.5 text-neutral-500 max-w-xs truncate">
-                          {fl.question_text || 'Unable to scan source text'}
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
-                              fl.status === 'resolved'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : fl.status === 'dismissed'
-                                ? 'bg-neutral-200 text-neutral-600'
-                                : 'bg-amber-100 text-amber-800 animate-pulse'
-                            }`}
-                          >
-                            {fl.status || 'pending'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5 text-right">
-                          <button
-                            onClick={() => handleReviewFlag(fl)}
-                            className="px-3 py-1 bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 font-bold text-[10px] rounded cursor-pointer transition-all"
-                          >
-                            Inspect & Resolve
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* 1. PRIMARY CREATION / EDITING FORM MODAL */}
-      {isFormOpen && (
-        <div className="fixed inset-0 overflow-y-auto z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-neutral-950/60 backdrop-blur-xs" onClick={() => setIsFormOpen(false)} />
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-2xl max-w-2xl w-full mx-auto relative z-10 max-h-[90vh] flex flex-col">
-            {/* Header */}
-            <header className="p-6 border-b border-neutral-100 dark:border-neutral-800 flex justify-between items-center bg-neutral-50 dark:bg-neutral-950/40">
-              <div>
-                <h3 className="text-base font-black text-neutral-900 dark:text-neutral-50">
-                  {editingQuestion ? 'Edit High-Yield NEET Question' : 'Add New High-Yield NEET Question'}
-                </h3>
-                <p className="text-xs text-neutral-400 mt-0.5">Define core options, options list, NCERT annotations, and review duplicates.</p>
-              </div>
-              <button
-                onClick={() => setIsFormOpen(false)}
-                className="p-1 text-neutral-400 hover:text-neutral-600 rounded-lg cursor-pointer"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </header>
-
-            {/* Form Fields */}
-            <form onSubmit={handleFormSubmit} className="p-6 overflow-y-auto space-y-5 text-xs flex-1">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div>
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">NEET Year</label>
-                  <input
-                    type="number"
-                    required
-                    value={formYear}
-                    onChange={(e) => setFormYear(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Subject</label>
-                  <select
-                    value={formSubject}
-                    onChange={(e) => setFormSubject(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-bold"
-                  >
-                    <option value="Physics">Physics</option>
-                    <option value="Chemistry">Chemistry</option>
-                    <option value="Biology">Biology</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Question No.</label>
-                  <input
-                    type="number"
-                    required
-                    value={formQNo}
-                    onChange={(e) => setFormQNo(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Difficulty</label>
-                  <select
-                    value={formDifficulty}
-                    onChange={(e) => setFormDifficulty(e.target.value as any)}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-bold"
-                  >
-                    <option value="Easy">Easy</option>
-                    <option value="Medium">Medium</option>
-                    <option value="Hard">Hard</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Chapter / Syllabus Reference</label>
-                <input
-                  type="text"
-                  required
-                  value={formChapter}
-                  onChange={(e) => setFormChapter(e.target.value)}
-                  placeholder="e.g. Molecular Basis of Inheritance"
-                  className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-semibold"
-                />
-              </div>
-
-              {/* Duplicate scanner hook */}
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 uppercase">Question Text</label>
-                  <button
-                    type="button"
-                    onClick={checkDuplicates}
-                    disabled={checkingDuplicates || !formText.trim()}
-                    className="text-[10px] font-black text-emerald-600 hover:text-emerald-500 flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                  >
-                    <Search className="h-3 w-3" />
-                    Scan duplicate matches
-                  </button>
-                </div>
-                <textarea
-                  required
-                  value={formText}
-                  onChange={(e) => setFormText(e.target.value)}
-                  placeholder="Write complete question content..."
-                  rows={3}
-                  className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-medium leading-relaxed"
-                />
-
-                {/* Duplicate matches alerts */}
-                {duplicateChecked && (
-                  <div className={`p-3 rounded-lg border text-[10px] ${
-                    duplicateMatches.length > 0 
-                      ? 'bg-rose-50 border-rose-100 text-rose-700' 
-                      : 'bg-emerald-50 border-emerald-100 text-emerald-700'
-                  }`}>
-                    {duplicateMatches.length > 0 ? (
-                      <div className="space-y-1.5">
-                        <p className="font-bold flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5 shrink-0" /> Duplicates detected! {duplicateMatches.length} matching questions found:</p>
-                        <ul className="list-disc pl-4 space-y-1">
-                          {duplicateMatches.map((m, idx) => (
-                            <li key={idx}>Subject: {m.subject} | Chapter: {m.chapter} | "{m.question.slice(0, 50)}..."</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : (
-                      <p className="font-bold flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5 shrink-0" /> ✓ No duplicates detected! This question is unique.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Option A</label>
-                  <input
-                    type="text"
-                    required
-                    value={formOptionA}
-                    onChange={(e) => setFormOptionA(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Option B</label>
-                  <input
-                    type="text"
-                    required
-                    value={formOptionB}
-                    onChange={(e) => setFormOptionB(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Option C</label>
-                  <input
-                    type="text"
-                    required
-                    value={formOptionC}
-                    onChange={(e) => setFormOptionC(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Option D</label>
-                  <input
-                    type="text"
-                    required
-                    value={formOptionD}
-                    onChange={(e) => setFormOptionD(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div className="col-span-1">
-                  <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Correct Option</label>
-                  <select
-                    value={formCorrect}
-                    onChange={(e) => setFormCorrect(e.target.value as any)}
-                    className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-bold text-emerald-600"
-                  >
-                    <option value="A">Option A</option>
-                    <option value="B">Option B</option>
-                    <option value="C">Option C</option>
-                    <option value="D">Option D</option>
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <span className="text-[10px] text-neutral-400 block mt-5 leading-normal">
-                    Option designated as correct answer key.
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Scientific Explanation / Derivation</label>
-                <textarea
-                  required
-                  value={formExplanation}
-                  onChange={(e) => setFormExplanation(e.target.value)}
-                  placeholder="Explain why the option is correct, citing NCERT reference chapters..."
-                  rows={3}
-                  className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-medium leading-relaxed"
-                />
-              </div>
-
-              {/* Footer */}
-              <footer className="pt-4 border-t border-neutral-100 dark:border-neutral-800 flex justify-end gap-3 bg-neutral-50 dark:bg-neutral-950/20 -mx-6 -mb-6 p-6">
-                <button
-                  type="button"
-                  onClick={() => setIsFormOpen(false)}
-                  className="px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer transition-colors shadow-xs"
-                >
-                  Save Question
-                </button>
-              </footer>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* 2. FLAGGED ISSUE RESOLUTION & CASCADING EDITS FORM MODAL */}
-      {activeFlag && (
-        <div className="fixed inset-0 overflow-y-auto z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-neutral-950/60 backdrop-blur-xs" onClick={() => setActiveFlag(null)} />
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-2xl max-w-2xl w-full mx-auto relative z-10 max-h-[90vh] flex flex-col">
-            <header className="p-6 border-b border-neutral-100 dark:border-neutral-800 flex justify-between items-center bg-neutral-50 dark:bg-neutral-950/40">
-              <div>
-                <h3 className="text-base font-black text-neutral-900 dark:text-neutral-50 flex items-center gap-1.5">
-                  <Flag className="h-5 w-5 text-rose-500 animate-pulse" />
-                  Review reported issue #{String(activeFlag.id).slice(0, 8)}
-                </h3>
-                <p className="text-xs text-neutral-400 mt-0.5">Reported by: {activeFlag.student_email} • Reason: "{activeFlag.reason}"</p>
-              </div>
-              <button onClick={() => setActiveFlag(null)} className="p-1 text-neutral-400 rounded-lg cursor-pointer">
-                <X className="h-5 w-5" />
-              </button>
-            </header>
-
-            <form onSubmit={handleResolveFlagSubmit} className="p-6 overflow-y-auto space-y-5 text-xs flex-1">
-              <div>
-                <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Set Status</label>
-                <div className="flex gap-2">
-                  {(['pending', 'resolved', 'dismissed'] as const).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => setFlagStatus(st)}
-                      className={`px-4 py-2 rounded-lg border font-bold uppercase text-[10px] cursor-pointer transition-all ${
-                        flagStatus === st
-                          ? st === 'resolved'
-                            ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                            : st === 'dismissed'
-                            ? 'bg-neutral-100 border-neutral-300 text-neutral-700'
-                            : 'bg-amber-50 border-amber-300 text-amber-700'
-                          : 'bg-white text-neutral-400 border-neutral-200 hover:bg-neutral-50'
-                      }`}
-                    >
-                      {st}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5 uppercase">Admin Resolution Note</label>
-                <textarea
-                  value={flagAdminNote}
-                  onChange={(e) => setFlagAdminNote(e.target.value)}
-                  placeholder="Record resolution action taken (e.g., 'Corrected Option B to Option C in database cascading update')"
-                  rows={2.5}
-                  className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 font-medium leading-relaxed"
-                />
-              </div>
-
-              {/* Cascading edit fields only visible when resolved */}
-              {flagStatus === 'resolved' && (
-                <div className="border border-emerald-100 dark:border-emerald-950/40 rounded-xl p-4 bg-emerald-50/10 space-y-4">
-                  <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-bold border-b border-emerald-100 dark:border-emerald-950/20 pb-2 mb-2">
-                    <Sparkles className="h-4.5 w-4.5" />
-                    <span>Cascading Question Correcter (Saves directly to registry)</span>
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-neutral-500 dark:text-neutral-400 mb-1 uppercase">Question Text</label>
-                    <textarea
-                      value={flagCascadeQuestion}
-                      onChange={(e) => setFlagCascadeQuestion(e.target.value)}
-                      rows={2.5}
-                      className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block font-semibold text-neutral-400 mb-1">Option A</label>
-                      <input
-                        type="text"
-                        value={flagCascadeOptA}
-                        onChange={(e) => setFlagCascadeOptA(e.target.value)}
-                        className="w-full px-3 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-neutral-400 mb-1">Option B</label>
-                      <input
-                        type="text"
-                        value={flagCascadeOptB}
-                        onChange={(e) => setFlagCascadeOptB(e.target.value)}
-                        className="w-full px-3 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-neutral-400 mb-1">Option C</label>
-                      <input
-                        type="text"
-                        value={flagCascadeOptC}
-                        onChange={(e) => setFlagCascadeOptC(e.target.value)}
-                        className="w-full px-3 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-neutral-400 mb-1">Option D</label>
-                      <input
-                        type="text"
-                        value={flagCascadeOptD}
-                        onChange={(e) => setFlagCascadeOptD(e.target.value)}
-                        className="w-full px-3 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block font-semibold text-neutral-500 mb-1 uppercase">Correct Answer Key</label>
-                      <select
-                        value={flagCascadeCorrect}
-                        onChange={(e) => setFlagCascadeCorrect(e.target.value as any)}
-                        className="w-full px-3 py-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 font-bold text-emerald-600"
-                      >
-                        <option value="A">Option A</option>
-                        <option value="B">Option B</option>
-                        <option value="C">Option C</option>
-                        <option value="D">Option D</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-neutral-500 mb-1 uppercase">Explanation Details</label>
-                    <textarea
-                      value={flagCascadeExplanation}
-                      onChange={(e) => setFlagCascadeExplanation(e.target.value)}
-                      rows={2}
-                      className="w-full px-3 py-2 rounded-lg border border-neutral-200 bg-white dark:bg-neutral-950"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Resolve Footer */}
-              <footer className="pt-4 border-t border-neutral-100 dark:border-neutral-800 flex justify-end gap-3 bg-neutral-50 dark:bg-neutral-950/20 -mx-6 -mb-6 p-6">
-                <button
-                  type="button"
-                  onClick={() => setActiveFlag(null)}
-                  className="px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer transition-colors shadow-xs"
-                >
-                  Submit Resolution
-                </button>
-              </footer>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Confirmation Modal */}
+      {/* Deletion Modal */}
       <Modal
         isOpen={isDeleteOpen}
         onClose={() => setIsDeleteOpen(false)}
         onConfirm={confirmDelete}
         title="Confirm Question Deletion"
-        message="Are you sure you want to permanently delete this high-yield NEET practice question from the student database? This transaction is recorded in audit logs and is non-reversible."
+        message="Are you sure you want to permanently delete this high-yield NEET practice question from the student database?"
         confirmText="Permanently Delete"
         cancelText="Cancel"
         isDanger={true}

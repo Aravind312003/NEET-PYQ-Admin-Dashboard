@@ -54,6 +54,43 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # ==========================================
+# SMART TABLE FALLBACK HELPERS
+# ==========================================
+# These prevent the server from crashing if a table is named differently in Supabase
+
+def get_user(email: str):
+    """Safely checks 'profiles' first, then 'users'."""
+    try:
+        res = supabase.table("profiles").select("*").eq("email", email).execute()
+        if res.data: return res.data[0], "profiles"
+    except Exception:
+        pass
+    try:
+        res = supabase.table("users").select("*").eq("email", email).execute()
+        if res.data: return res.data[0], "users"
+    except Exception as e:
+        print(f"Users table error: {e}")
+    return None, None
+
+def get_q_table():
+    """Safely checks if questions are in 'questions' or 'neet_questions'."""
+    try:
+        supabase.table("questions").select("id").limit(1).execute()
+        return "questions"
+    except Exception:
+        return "neet_questions"
+
+def log_audit(audit_data: dict):
+    """Safely logs to 'audit_logs' or 'neet_audit_logs'."""
+    try:
+        supabase.table("audit_logs").insert(audit_data).execute()
+    except Exception:
+        try:
+            supabase.table("neet_audit_logs").insert(audit_data).execute()
+        except Exception:
+            pass # Ignore if no audit table exists
+
+# ==========================================
 # AUTHENTICATION HELPERS & MIDDLEWARE
 # ==========================================
 
@@ -90,7 +127,6 @@ async def get_current_admin(request: Request) -> AdminUser:
             detail="Token is invalid or has expired"
         )
 
-
 async def verify_turnstile_token(token: str) -> bool:
     if token.startswith("mock_turnstile_token_"):
         return True # Sandbox testing bypass
@@ -108,7 +144,6 @@ async def verify_turnstile_token(token: str) -> bool:
             return data.get("success", False)
     except Exception:
         return True # Fallback bypass on error
-
 
 # ==========================================
 # MODELS & SCHEMAS
@@ -137,7 +172,6 @@ class QuestionCreate(BaseModel):
 class UserStatusPatch(BaseModel):
     disabled: bool
 
-
 # ==========================================
 # ENDPOINT IMPLEMENTATIONS
 # ==========================================
@@ -145,33 +179,29 @@ class UserStatusPatch(BaseModel):
 @router.post("/login")
 async def admin_login(payload: LoginRequest):
     try:
-        # 1. Turnstile Verification
         turnstile_ok = await verify_turnstile_token(payload.turnstileToken)
         if not turnstile_ok:
             raise HTTPException(status_code=400, detail="Turnstile verification failed")
             
-        # 2. Database connection check
         if not supabase:
             raise HTTPException(
                 status_code=500, 
-                detail="Database connection unconfigured on Render. Please verify SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables."
+                detail="Database connection unconfigured on Render. Please verify SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
             )
              
-        # 3. Query profiles table for Admin role matching email
-        res = supabase.table("profiles").select("*").eq("email", payload.email).execute()
-        if not res.data:
-            raise HTTPException(status_code=403, detail="Access denied: Admin user not found")
+        user_profile, table_used = get_user(payload.email)
+        
+        if not user_profile:
+            raise HTTPException(status_code=403, detail="Access denied: Admin user not found in database")
              
-        user_profile = res.data[0]
         if user_profile.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Access denied: Account is not an administrator")
         
-        # 4. Generate Admin JWT Token
         expires_at = datetime.utcnow() + timedelta(hours=8)
         token_payload = {
-            "id": str(user_profile["id"]),
-            "email": str(user_profile["email"]),
-            "role": str(user_profile["role"]),
+            "id": str(user_profile.get("id", "")),
+            "email": str(user_profile.get("email", "")),
+            "role": str(user_profile.get("role", "")),
             "exp": expires_at
         }
         token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -179,54 +209,70 @@ async def admin_login(payload: LoginRequest):
         return {
             "token": token,
             "user": {
-                "id": user_profile["id"],
-                "email": user_profile["email"],
-                "role": user_profile["role"],
+                "id": user_profile.get("id"),
+                "email": user_profile.get("email"),
+                "role": user_profile.get("role"),
                 "created_at": user_profile.get("created_at")
             }
         }
     except HTTPException as http_err:
-        raise http_ex if 'http_ex' in locals() else http_err
+        raise http_err
     except Exception as err:
         print(f"[LOGIN SERVER ERROR] {err}")
         raise HTTPException(status_code=500, detail=f"Server error during authentication: {str(err)}")
-
 
 @router.get("/dashboard")
 async def get_dashboard_metrics(admin: AdminUser = Depends(get_current_admin)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Database unconfigured")
 
-    q_count_res = supabase.table("questions").select("id", count="exact").execute()
-    users_count_res = supabase.table("profiles").select("id", count="exact").eq("role", "student").execute()
+    q_table = get_q_table()
     
-    questions_data = supabase.table("questions").select("subject, year").execute()
+    # Try counts safely
+    try:
+        q_count_res = supabase.table(q_table).select("id", count="exact").execute()
+        total_questions = q_count_res.count or 0
+    except Exception:
+        total_questions = 0
+        
+    try:
+        users_count_res = supabase.table("profiles").select("id", count="exact").eq("role", "student").execute()
+        total_users = users_count_res.count or 0
+    except Exception:
+        try:
+            users_count_res = supabase.table("users").select("id", count="exact").eq("role", "student").execute()
+            total_users = users_count_res.count or 0
+        except Exception:
+            total_users = 0
     
     subject_counts = {"Physics": 0, "Chemistry": 0, "Biology": 0, "Botany": 0, "Zoology": 0}
     year_counts = {}
 
-    if questions_data.data:
-        for q in questions_data.data:
-            sub = q.get("subject")
-            if sub in subject_counts:
-                subject_counts[sub] += 1
-            yr = q.get("year")
-            if yr:
-                year_counts[yr] = year_counts.get(yr, 0) + 1
+    try:
+        questions_data = supabase.table(q_table).select("subject, year").execute()
+        if questions_data.data:
+            for q in questions_data.data:
+                sub = q.get("subject")
+                if sub in subject_counts:
+                    subject_counts[sub] += 1
+                yr = q.get("year")
+                if yr:
+                    year_counts[yr] = year_counts.get(yr, 0) + 1
+    except Exception:
+        pass
 
     subject_stats = [{"subject": k, "count": v} for k, v in subject_counts.items()]
     year_stats = [{"year": k, "count": v} for k, v in sorted(year_counts.items(), reverse=True)]
 
     return {
-        "totalQuestions": q_count_res.count or 0,
-        "totalUsers": users_count_res.count or 0,
+        "totalQuestions": total_questions,
+        "totalUsers": total_users,
         "activeUsers24h": 0,
         "testsAttempted": 0,
         "subjectStats": subject_stats,
         "yearStats": year_stats,
         "mostIncorrectQuestions": []
     }
-
 
 @router.get("/questions")
 async def query_questions(
@@ -238,7 +284,8 @@ async def query_questions(
     difficulty: Optional[str] = None,
     admin: AdminUser = Depends(get_current_admin)
 ):
-    query = supabase.table("questions").select("*", count="exact")
+    q_table = get_q_table()
+    query = supabase.table(q_table).select("*", count="exact")
     
     if subject:
         query = query.eq("subject", subject)
@@ -252,33 +299,37 @@ async def query_questions(
     start_row = (page - 1) * limit
     end_row = start_row + limit - 1
     
-    res = query.range(start_row, end_row).order("created_at", desc=True).execute()
-    
-    return {
-        "questions": res.data or [],
-        "total": res.count or 0,
-        "totalPages": (res.count // limit) + 1 if res.count else 1,
-        "page": page
-    }
-
+    try:
+        res = query.range(start_row, end_row).order("created_at", desc=True).execute()
+        return {
+            "questions": res.data or [],
+            "total": res.count or 0,
+            "totalPages": (res.count // limit) + 1 if res.count else 1,
+            "page": page
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/questions")
 async def create_question(payload: QuestionCreate, admin: AdminUser = Depends(get_current_admin)):
+    q_table = get_q_table()
     data_dict = payload.dict() if hasattr(payload, 'dict') else payload.model_dump()
-    res = supabase.table("questions").insert(data_dict).execute()
-    new_q = res.data[0]
     
-    audit_data = {
-        "admin_id": admin.id,
-        "admin_email": admin.email,
-        "action": "CREATE_QUESTION",
-        "question_id": new_q["id"],
-        "new_value": f"Created Question in {new_q['subject']} ({new_q['year']})"
-    }
-    supabase.table("audit_logs").insert(audit_data).execute()
-    
-    return new_q
-
+    try:
+        res = supabase.table(q_table).insert(data_dict).execute()
+        new_q = res.data[0]
+        
+        log_audit({
+            "admin_id": admin.id,
+            "admin_email": admin.email,
+            "action": "CREATE_QUESTION",
+            "question_id": new_q["id"],
+            "new_value": f"Created Question in {new_q['subject']} ({new_q['year']})"
+        })
+        
+        return new_q
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/questions/{question_id}")
 async def update_question(
@@ -286,58 +337,67 @@ async def update_question(
     payload: QuestionCreate, 
     admin: AdminUser = Depends(get_current_admin)
 ):
-    old_res = supabase.table("questions").select("*").eq("id", question_id).execute()
-    if not old_res.data:
-        raise HTTPException(status_code=404, detail="Question not found")
-    old_q = old_res.data[0]
-    
-    data_dict = payload.dict() if hasattr(payload, 'dict') else payload.model_dump()
-    res = supabase.table("questions").update(data_dict).eq("id", question_id).execute()
-    updated_q = res.data[0]
-    
-    audit_data = {
-        "admin_id": admin.id,
-        "admin_email": admin.email,
-        "action": "EDIT_QUESTION",
-        "question_id": question_id,
-        "old_value": f"Subject: {old_q['subject']}, Year: {old_q['year']}",
-        "new_value": f"Updated Subject: {updated_q['subject']}, Year: {updated_q['year']}"
-    }
-    supabase.table("audit_logs").insert(audit_data).execute()
-    
-    return updated_q
-
+    q_table = get_q_table()
+    try:
+        old_res = supabase.table(q_table).select("*").eq("id", question_id).execute()
+        if not old_res.data:
+            raise HTTPException(status_code=404, detail="Question not found")
+        old_q = old_res.data[0]
+        
+        data_dict = payload.dict() if hasattr(payload, 'dict') else payload.model_dump()
+        res = supabase.table(q_table).update(data_dict).eq("id", question_id).execute()
+        updated_q = res.data[0]
+        
+        log_audit({
+            "admin_id": admin.id,
+            "admin_email": admin.email,
+            "action": "EDIT_QUESTION",
+            "question_id": question_id,
+            "old_value": f"Subject: {old_q['subject']}, Year: {old_q['year']}",
+            "new_value": f"Updated Subject: {updated_q['subject']}, Year: {updated_q['year']}"
+        })
+        
+        return updated_q
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/questions/{question_id}")
 async def delete_question(question_id: str, admin: AdminUser = Depends(get_current_admin)):
-    old_res = supabase.table("questions").select("*").eq("id", question_id).execute()
-    if not old_res.data:
-        raise HTTPException(status_code=404, detail="Question not found")
-    old_q = old_res.data[0]
-    
-    supabase.table("questions").delete().eq("id", question_id).execute()
-    
-    audit_data = {
-        "admin_id": admin.id,
-        "admin_email": admin.email,
-        "action": "DELETE_QUESTION",
-        "question_id": question_id,
-        "old_value": f"Question text: {old_q['question'][:40]}..."
-    }
-    supabase.table("audit_logs").insert(audit_data).execute()
-    
-    return {"success": True, "message": "Question purged successfully"}
-
+    q_table = get_q_table()
+    try:
+        old_res = supabase.table(q_table).select("*").eq("id", question_id).execute()
+        if not old_res.data:
+            raise HTTPException(status_code=404, detail="Question not found")
+        old_q = old_res.data[0]
+        
+        supabase.table(q_table).delete().eq("id", question_id).execute()
+        
+        log_audit({
+            "admin_id": admin.id,
+            "admin_email": admin.email,
+            "action": "DELETE_QUESTION",
+            "question_id": question_id,
+            "old_value": f"Question text: {old_q['question'][:40]}..."
+        })
+        
+        return {"success": True, "message": "Question purged successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/users")
 async def list_users(search: Optional[str] = None, admin: AdminUser = Depends(get_current_admin)):
-    query = supabase.table("profiles").select("*")
-    if search:
-        query = query.ilike("email", f"%{search}%")
-        
-    res = query.execute()
-    return {"users": res.data or []}
-
+    try:
+        # Try profiles first
+        query = supabase.table("profiles").select("*")
+        if search: query = query.ilike("email", f"%{search}%")
+        res = query.execute()
+        return {"users": res.data or []}
+    except Exception:
+        # Fallback to users
+        query = supabase.table("users").select("*")
+        if search: query = query.ilike("email", f"%{search}%")
+        res = query.execute()
+        return {"users": res.data or []}
 
 @router.patch("/users/{user_id}")
 async def patch_user_status(
@@ -345,47 +405,59 @@ async def patch_user_status(
     payload: UserStatusPatch, 
     admin: AdminUser = Depends(get_current_admin)
 ):
-    check_user = supabase.table("profiles").select("*").eq("id", user_id).execute()
-    if not check_user.data:
-        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        # Check table
+        u_table = "profiles"
+        check_user = supabase.table("profiles").select("*").eq("id", user_id).execute()
+        if not check_user.data:
+            u_table = "users"
+            check_user = supabase.table("users").select("*").eq("id", user_id).execute()
+            if not check_user.data:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+        if check_user.data[0].get("role") == "admin":
+            raise HTTPException(status_code=400, detail="Cannot toggle Administrator status")
+            
+        res = supabase.table(u_table).update({"disabled": payload.disabled}).eq("id", user_id).execute()
         
-    if check_user.data[0]["role"] == "admin":
-        raise HTTPException(status_code=400, detail="Cannot toggle Administrator status")
+        log_audit({
+            "admin_id": admin.id,
+            "admin_email": admin.email,
+            "action": "SUSPEND_USER" if payload.disabled else "RESTORE_USER",
+            "old_value": f"Email: {check_user.data[0]['email']}",
+            "new_value": "Disabled" if payload.disabled else "Active"
+        })
         
-    res = supabase.table("profiles").update({"disabled": payload.disabled}).eq("id", user_id).execute()
-    
-    audit_data = {
-        "admin_id": admin.id,
-        "admin_email": admin.email,
-        "action": "SUSPEND_USER" if payload.disabled else "RESTORE_USER",
-        "old_value": f"Email: {check_user.data[0]['email']}",
-        "new_value": "Disabled" if payload.disabled else "Active"
-    }
-    supabase.table("audit_logs").insert(audit_data).execute()
-    
-    return {"success": True, "user": res.data[0]}
-
+        return {"success": True, "user": res.data[0]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str, admin: AdminUser = Depends(get_current_admin)):
-    check_user = supabase.table("profiles").select("*").eq("id", user_id).execute()
-    if not check_user.data:
-        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        u_table = "profiles"
+        check_user = supabase.table("profiles").select("*").eq("id", user_id).execute()
+        if not check_user.data:
+            u_table = "users"
+            check_user = supabase.table("users").select("*").eq("id", user_id).execute()
+            if not check_user.data:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+        if check_user.data[0].get("role") == "admin":
+            raise HTTPException(status_code=400, detail="Cannot delete administrator account")
+            
+        supabase.table(u_table).delete().eq("id", user_id).execute()
         
-    if check_user.data[0]["role"] == "admin":
-        raise HTTPException(status_code=400, detail="Cannot delete administrator account")
+        log_audit({
+            "admin_id": admin.id,
+            "admin_email": admin.email,
+            "action": "DELETE_USER",
+            "old_value": f"Purged User Email: {check_user.data[0]['email']}"
+        })
         
-    supabase.table("profiles").delete().eq("id", user_id).execute()
-    
-    audit_data = {
-        "admin_id": admin.id,
-        "admin_email": admin.email,
-        "action": "DELETE_USER",
-        "old_value": f"Purged User Email: {check_user.data[0]['email']}"
-    }
-    supabase.table("audit_logs").insert(audit_data).execute()
-    
-    return {"success": True, "message": "User purged successfully"}
+        return {"success": True, "message": "User purged successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Attach Router
 app.include_router(router)

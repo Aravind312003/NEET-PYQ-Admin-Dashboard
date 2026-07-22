@@ -301,35 +301,41 @@ async def query_questions(
     admin: AdminUser = Depends(get_current_admin)
 ):
     q_table = get_q_table()
-    query = supabase.table(q_table).select("*", count="exact")
     
-    if subject and subject.strip():
-        query = query.eq("subject", subject.strip())
-    if year and year.strip() and year.isdigit():
-        query = query.eq("year", int(year.strip()))
-    if difficulty and difficulty.strip():
-        query = query.eq("difficulty", difficulty.strip())
-    if search and search.strip():
-        query = query.ilike("question", f"%{search.strip()}%")
-        
-    start_row = (page - 1) * limit
-    end_row = start_row + limit - 1
-    
-    # Safe query execution with fallback
     try:
-        res = query.range(start_row, end_row).order("created_at", desc=True).execute()
-    except Exception:
-        try:
-            res = query.range(start_row, end_row).execute()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        # Base query for selection and count
+        query = supabase.table(q_table).select("*", count="exact")
+        
+        # Apply filters conditionally to prevent type/empty query errors
+        if subject and subject.strip() and subject != "null":
+            query = query.eq("subject", subject.strip())
+        if year and year.strip() and year != "null" and year.isdigit():
+            query = query.eq("year", int(year.strip()))
+        if difficulty and difficulty.strip() and difficulty != "null":
+            query = query.eq("difficulty", difficulty.strip())
+        if search and search.strip() and search != "null":
+            query = query.ilike("question", f"%{search.strip()}%")
             
-    return {
-        "questions": res.data or [],
-        "total": res.count or 0,
-        "totalPages": max(1, (res.count // limit) + (1 if res.count and res.count % limit > 0 else 0)) if res.count else 1,
-        "page": page
-    }
+        start_row = (page - 1) * limit
+        end_row = start_row + limit - 1
+        
+        # Execute query safely with fallbacks for sorting columns
+        try:
+            res = query.range(start_row, end_row).order("created_at", desc=True).execute()
+        except Exception:
+            res = query.range(start_row, end_row).execute()
+            
+        total_count = res.count if hasattr(res, 'count') and res.count is not None else len(res.data or [])
+
+        return {
+            "questions": res.data or [],
+            "total": total_count,
+            "totalPages": max(1, (total_count // limit) + (1 if total_count % limit > 0 else 0)),
+            "page": page
+        }
+    except Exception as e:
+        print(f"[QUESTIONS QUERY ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database query error: {str(e)}")
 
 
 @router.post("/questions")

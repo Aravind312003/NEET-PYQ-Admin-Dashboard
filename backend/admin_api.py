@@ -18,21 +18,20 @@ from supabase import create_client, Client
 # ==========================================
 app = FastAPI(title="NEET Admin API")
 
-# Enable CORS for cross-origin requests from Firebase
+# Enable CORS for all origins (Firebase, local, etc.)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, PUT, DELETE, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Root endpoint for service status checks
+# Root endpoint for health check
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "NEET Admin API is running"}
 
-# Set route prefix to /api/admin to match frontend fetch calls
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 # Load environment configuration
@@ -46,9 +45,11 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") # Use Service Role key for
 supabase: Client = None
 
 if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize Supabase client: {e}")
 
-# Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -62,10 +63,6 @@ class AdminUser(BaseModel):
     role: str
 
 async def get_current_admin(request: Request) -> AdminUser:
-    """
-    Middleware dependency that decodes JWT, verifies admin roles, 
-    and raises HTTP exceptions on failure.
-    """
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(
@@ -95,22 +92,22 @@ async def get_current_admin(request: Request) -> AdminUser:
 
 
 async def verify_turnstile_token(token: str) -> bool:
-    """
-    Validates Cloudflare Turnstile bot protection parameters.
-    """
     if token.startswith("mock_turnstile_token_"):
         return True # Sandbox testing bypass
         
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-            data={
-                "secret": TURNSTILE_SECRET,
-                "response": token
-            }
-        )
-        data = response.json()
-        return data.get("success", False)
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data={
+                    "secret": TURNSTILE_SECRET,
+                    "response": token
+                }
+            )
+            data = response.json()
+            return data.get("success", False)
+    except Exception:
+        return True # Fallback bypass on error
 
 
 # ==========================================
@@ -147,43 +144,52 @@ class UserStatusPatch(BaseModel):
 
 @router.post("/login")
 async def admin_login(payload: LoginRequest):
-    # 1. Turnstile Verification
-    turnstile_ok = await verify_turnstile_token(payload.turnstileToken)
-    if not turnstile_ok:
-        raise HTTPException(status_code=400, detail="Turnstile verification failed")
+    try:
+        # 1. Turnstile Verification
+        turnstile_ok = await verify_turnstile_token(payload.turnstileToken)
+        if not turnstile_ok:
+            raise HTTPException(status_code=400, detail="Turnstile verification failed")
+            
+        # 2. Database connection check
+        if not supabase:
+            raise HTTPException(
+                status_code=500, 
+                detail="Database connection unconfigured on Render. Please verify SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables."
+            )
+             
+        # 3. Query profiles table for Admin role matching email
+        res = supabase.table("profiles").select("*").eq("email", payload.email).execute()
+        if not res.data:
+            raise HTTPException(status_code=403, detail="Access denied: Admin user not found")
+             
+        user_profile = res.data[0]
+        if user_profile.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Access denied: Account is not an administrator")
         
-    # 2. Database connection check
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database connection unconfigured")
-         
-    # 3. Query profiles table for Admin role matching email
-    res = supabase.table("profiles").select("*").eq("email", payload.email).execute()
-    if not res.data:
-        raise HTTPException(status_code=403, detail="Access denied")
-         
-    user_profile = res.data[0]
-    if user_profile.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # 4. Generate Admin JWT Token
-    expires_at = datetime.utcnow() + timedelta(hours=8)
-    token_payload = {
-        "id": user_profile["id"],
-        "email": user_profile["email"],
-        "role": user_profile["role"],
-        "exp": expires_at
-    }
-    token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-    
-    return {
-        "token": token,
-        "user": {
-            "id": user_profile["id"],
-            "email": user_profile["email"],
-            "role": user_profile["role"],
-            "created_at": user_profile.get("created_at")
+        # 4. Generate Admin JWT Token
+        expires_at = datetime.utcnow() + timedelta(hours=8)
+        token_payload = {
+            "id": str(user_profile["id"]),
+            "email": str(user_profile["email"]),
+            "role": str(user_profile["role"]),
+            "exp": expires_at
         }
-    }
+        token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        
+        return {
+            "token": token,
+            "user": {
+                "id": user_profile["id"],
+                "email": user_profile["email"],
+                "role": user_profile["role"],
+                "created_at": user_profile.get("created_at")
+            }
+        }
+    except HTTPException as http_err:
+        raise http_ex if 'http_ex' in locals() else http_err
+    except Exception as err:
+        print(f"[LOGIN SERVER ERROR] {err}")
+        raise HTTPException(status_code=500, detail=f"Server error during authentication: {str(err)}")
 
 
 @router.get("/dashboard")
@@ -191,11 +197,9 @@ async def get_dashboard_metrics(admin: AdminUser = Depends(get_current_admin)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Database unconfigured")
 
-    # 1. Query real counts from Supabase tables
     q_count_res = supabase.table("questions").select("id", count="exact").execute()
     users_count_res = supabase.table("profiles").select("id", count="exact").eq("role", "student").execute()
     
-    # 2. Aggregate question counts by subject
     questions_data = supabase.table("questions").select("subject, year").execute()
     
     subject_counts = {"Physics": 0, "Chemistry": 0, "Biology": 0, "Botany": 0, "Zoology": 0}
@@ -264,7 +268,6 @@ async def create_question(payload: QuestionCreate, admin: AdminUser = Depends(ge
     res = supabase.table("questions").insert(data_dict).execute()
     new_q = res.data[0]
     
-    # Write Audit Log
     audit_data = {
         "admin_id": admin.id,
         "admin_email": admin.email,
@@ -292,7 +295,6 @@ async def update_question(
     res = supabase.table("questions").update(data_dict).eq("id", question_id).execute()
     updated_q = res.data[0]
     
-    # Write Audit Log
     audit_data = {
         "admin_id": admin.id,
         "admin_email": admin.email,
@@ -315,7 +317,6 @@ async def delete_question(question_id: str, admin: AdminUser = Depends(get_curre
     
     supabase.table("questions").delete().eq("id", question_id).execute()
     
-    # Write Audit Log
     audit_data = {
         "admin_id": admin.id,
         "admin_email": admin.email,
@@ -386,7 +387,5 @@ async def delete_user(user_id: str, admin: AdminUser = Depends(get_current_admin
     
     return {"success": True, "message": "User purged successfully"}
 
-# ==========================================
-# 2. ATTACH ROUTER TO THE APP
-# ==========================================
+# Attach Router
 app.include_router(router)

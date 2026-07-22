@@ -303,10 +303,8 @@ async def query_questions(
     q_table = get_q_table()
     
     try:
-        # Base query for selection and count
         query = supabase.table(q_table).select("*", count="exact")
         
-        # Apply filters conditionally to prevent type/empty query errors
         if subject and subject.strip() and subject != "null":
             query = query.eq("subject", subject.strip())
         if year and year.strip() and year != "null" and year.isdigit():
@@ -319,11 +317,8 @@ async def query_questions(
         start_row = (page - 1) * limit
         end_row = start_row + limit - 1
         
-        # Execute query safely with fallbacks for sorting columns
-        try:
-            res = query.range(start_row, end_row).order("created_at", desc=True).execute()
-        except Exception:
-            res = query.range(start_row, end_row).execute()
+        # Execute query safely without missing column sorting dependencies
+        res = query.range(start_row, end_row).execute()
             
         total_count = res.count if hasattr(res, 'count') and res.count is not None else len(res.data or [])
 

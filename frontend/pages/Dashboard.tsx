@@ -58,7 +58,8 @@ export default function Dashboard() {
       }
 
       try {
-        const response = await fetch('/api/admin/dashboard', {
+        // UPDATED: Pointing directly to your Render backend
+        const response = await fetch('https://neet-pyq-admin-dashboard.onrender.com/api/admin/dashboard', {
           headers: {
             Authorization: `Bearer ${token}`,
           },

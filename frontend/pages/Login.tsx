@@ -38,7 +38,8 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/admin/login', {
+      // UPDATED: Pointing directly to your Render backend
+      const response = await fetch('https://neet-pyq-admin-dashboard.onrender.com/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, turnstileToken }),

@@ -296,7 +296,7 @@ async def query_questions(
     limit: int = 10, 
     search: Optional[str] = None,
     subject: Optional[str] = None,
-    year: Optional[str] = None,  # Handled as string to prevent 422 parsing errors on empty values
+    year: Optional[str] = None,  
     difficulty: Optional[str] = None,
     admin: AdminUser = Depends(get_current_admin)
 ):
@@ -315,11 +315,11 @@ async def query_questions(
     start_row = (page - 1) * limit
     end_row = start_row + limit - 1
     
+    # Safe query execution with fallback
     try:
         res = query.range(start_row, end_row).order("created_at", desc=True).execute()
     except Exception:
         try:
-            # Fallback if created_at column doesn't exist
             res = query.range(start_row, end_row).execute()
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
@@ -327,7 +327,7 @@ async def query_questions(
     return {
         "questions": res.data or [],
         "total": res.count or 0,
-        "totalPages": (res.count // limit) + 1 if res.count else 1,
+        "totalPages": max(1, (res.count // limit) + (1 if res.count and res.count % limit > 0 else 0)) if res.count else 1,
         "page": page
     }
 

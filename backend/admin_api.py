@@ -1,10 +1,9 @@
 # ========================================================
 # FASTAPI PYTHON REFERENCE ENDPOINTS FOR ADMIN DASHBOARD
 # ========================================================
-# Copy this file into your existing FastAPI backend codebase to 
-# seamlessly connect the separate React Admin Panel.
 
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 import httpx
@@ -13,6 +12,20 @@ import jwt
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from supabase import create_client, Client
+
+# ==========================================
+# 1. INITIALIZE FASTAPI APP & CORS
+# ==========================================
+app = FastAPI(title="NEET Admin API")
+
+# Add CORS so your React frontend can successfully make requests to this backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -179,7 +192,7 @@ async def get_dashboard_metrics(admin: AdminUser = Depends(get_current_admin)):
     users_count_res = supabase.table("profiles").select("id", count="exact").eq("role", "student").execute()
     
     # 2. Extract Subject stats
-    subject_res = supabase.rpc("get_questions_count_by_subject").execute() # Or standard table aggregations
+    # Requires an RPC or you can do standard table aggregations if RPC doesn't exist
     
     # 3. Compile Audit/Analytics response
     return {
@@ -366,3 +379,8 @@ async def delete_user(user_id: str, admin: AdminUser = Depends(get_current_admin
     supabase.table("audit_logs").insert(audit_data).execute()
     
     return {"success": True, "message": "User purged successfully"}
+
+# ==========================================
+# 2. ATTACH ROUTER TO THE APP
+# ==========================================
+app.include_router(router)

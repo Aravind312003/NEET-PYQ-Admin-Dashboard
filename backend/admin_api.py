@@ -79,7 +79,7 @@ def get_q_table():
         return "neet_questions"
     try:
         res = supabase.table("neet_questions").select("id", count="exact").limit(1).execute()
-        if res.count is not None and res.count > 0:
+        if res.count is not None and res.count >= 0:
             return "neet_questions"
     except Exception:
         pass
@@ -296,35 +296,40 @@ async def query_questions(
     limit: int = 10, 
     search: Optional[str] = None,
     subject: Optional[str] = None,
-    year: Optional[int] = None,
+    year: Optional[str] = None,  # Handled as string to prevent 422 parsing errors on empty values
     difficulty: Optional[str] = None,
     admin: AdminUser = Depends(get_current_admin)
 ):
     q_table = get_q_table()
     query = supabase.table(q_table).select("*", count="exact")
     
-    if subject:
-        query = query.eq("subject", subject)
-    if year:
-        query = query.eq("year", year)
-    if difficulty:
-        query = query.eq("difficulty", difficulty)
-    if search:
-        query = query.ilike("question", f"%{search}%")
+    if subject and subject.strip():
+        query = query.eq("subject", subject.strip())
+    if year and year.strip() and year.isdigit():
+        query = query.eq("year", int(year.strip()))
+    if difficulty and difficulty.strip():
+        query = query.eq("difficulty", difficulty.strip())
+    if search and search.strip():
+        query = query.ilike("question", f"%{search.strip()}%")
         
     start_row = (page - 1) * limit
     end_row = start_row + limit - 1
     
     try:
         res = query.range(start_row, end_row).order("created_at", desc=True).execute()
-        return {
-            "questions": res.data or [],
-            "total": res.count or 0,
-            "totalPages": (res.count // limit) + 1 if res.count else 1,
-            "page": page
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        try:
+            # Fallback if created_at column doesn't exist
+            res = query.range(start_row, end_row).execute()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+            
+    return {
+        "questions": res.data or [],
+        "total": res.count or 0,
+        "totalPages": (res.count // limit) + 1 if res.count else 1,
+        "page": page
+    }
 
 
 @router.post("/questions")
